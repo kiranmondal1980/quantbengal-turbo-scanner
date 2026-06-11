@@ -8,7 +8,7 @@ def apply_turbo_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # EMA Stacks (9, 21, and 200)
     df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
-    df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean() # NEW: Medium term momentum
+    df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean() # THIS IS THE MISSING LINE!
     df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
 
     # Daily VWAP
