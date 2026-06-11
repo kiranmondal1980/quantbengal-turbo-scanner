@@ -4,6 +4,7 @@ import time
 import logging
 import requests
 import yfinance as yf
+import pandas as pd       # <--- ADD THIS LINE HERE
 from indicators import apply_turbo_indicators
 
 # Configure Professional Logging
