@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import yfinance as yf
+import ta
 import plotly.graph_objects as go
-from indicators import apply_turbo_indicators
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="SMC Liquidity Terminal", page_icon="🏦", layout="wide")
@@ -15,9 +16,28 @@ AVAILABLE_ASSETS = {
     "GOLD": "GC=F"
 }
 
-@st.cache_data(ttl=60)
-def fetch_and_calculate(ticker: str):
-    # Using 15-minute timeframe for larger, high-probability institutional moves
+# --- MERGED INDICATORS LOGIC (Directly inside app.py) ---
+def calculate_smc_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    # 1. Identify local Support and Resistance (Swing Highs/Lows over 20 periods)
+    df['Prev_Support'] = df['Low'].rolling(window=20).min().shift(1)
+    df['Prev_Resistance'] = df['High'].rolling(window=20).max().shift(1)
+
+    # 2. Institutional Volume Filter (Moving Average of Volume)
+    df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
+
+    # 3. Volatility metric (ATR)
+    df['ATR'] = ta.volatility.AverageTrueRange(
+        high=df['High'], low=df['Low'], close=df['Close'], window=14
+    ).average_true_range()
+
+    return df
+
+# --- NO CACHE FORCING RAW RE-CALCULATION ---
+def fetch_and_calculate_fresh(ticker: str):
+    # Pulling 30 days of 15-minute data
     df = yf.download(ticker, period="30d", interval="15m", progress=False)
     if df.empty or len(df) < 50:
         return None
@@ -25,20 +45,19 @@ def fetch_and_calculate(ticker: str):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df = apply_turbo_indicators(df)
+    # Run indicators locally
+    df = calculate_smc_indicators(df)
     
     df['Signal'] = 0 
     
-    # 🏦 BULLISH LIQUIDITY SWEEP (Institutions sweeping retail sell stops)
-    # Price dipped below support, but closed above support on high volume
+    # 🏦 BULLISH LIQUIDITY SWEEP
     bullish_sweep = (
         (df['Low'] < df['Prev_Support']) & 
         (df['Close'] > df['Prev_Support']) &
-        (df['Volume'] > (df['Vol_SMA'] * 1.2)) # High volume confirms institutional absorption
+        (df['Volume'] > (df['Vol_SMA'] * 1.2))
     )
     
-    # 🏦 BEARISH LIQUIDITY SWEEP (Institutions sweeping breakout buyers)
-    # Price spiked above resistance, but closed below resistance on high volume
+    # 🏦 BEARISH LIQUIDITY SWEEP
     bearish_sweep = (
         (df['High'] > df['Prev_Resistance']) & 
         (df['Close'] < df['Prev_Resistance']) &
@@ -117,7 +136,6 @@ def plot_professional_chart(df, asset_name):
         low=df_plot['Low'], close=df_plot['Close'], name='Price'
     ))
 
-    # Plot Support and Resistance Levels (The boundaries where retail stops sit)
     fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Prev_Support'], line=dict(color='red', width=1, dash='dash'), name='Retail Stops Low'))
     fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Prev_Resistance'], line=dict(color='green', width=1, dash='dash'), name='Retail Stops High'))
 
@@ -146,15 +164,16 @@ st.sidebar.title("🏦 Institutional Settings")
 selected_asset = st.sidebar.selectbox("Select Asset:", list(AVAILABLE_ASSETS.keys()))
 ticker = AVAILABLE_ASSETS[selected_asset]
 
-# Dynamic point settings (15-minute timeframe targets larger sweeps)
 TARGET_POINTS = 100.0 if "NIFTY" in selected_asset or "SENSEX" in selected_asset else 1.0
-STOP_LOSS_POINTS = TARGET_POINTS / 2.5  # High RR ratio (1:2.5)
+STOP_LOSS_POINTS = TARGET_POINTS / 2.5 
 
+st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Force Refresh All Data"):
     st.cache_data.clear()
 
 with st.spinner("Scanning Order Flow for Stop Hunts..."):
-    df = fetch_and_calculate(ticker)
+    # Running fresh calculation, bypassing previous caching bugs
+    df = fetch_and_calculate_fresh(ticker)
 
 if df is None:
     st.error("Not enough historical data or markets closed.")
