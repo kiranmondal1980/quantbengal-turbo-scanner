@@ -6,25 +6,14 @@ def apply_turbo_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # EMA Stacks (9, 21, and 200)
-    df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
-    df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean() # THIS IS THE MISSING LINE!
-    df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
+    # 1. Identify local Support and Resistance (Swing Highs/Lows over 20 periods)
+    df['Prev_Support'] = df['Low'].rolling(window=20).min().shift(1)
+    df['Prev_Resistance'] = df['High'].rolling(window=20).max().shift(1)
 
-    # Daily VWAP
-    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VP'] = df['Typical_Price'] * df['Volume']
-    df['Date'] = df.index.date
-    df['Cumulative_VP'] = df.groupby('Date')['VP'].cumsum()
-    df['Cumulative_Vol'] = df.groupby('Date')['Volume'].cumsum()
-    
-    df['VWAP'] = np.where(
-        df['Cumulative_Vol'] == 0,
-        df['Typical_Price'],
-        df['Cumulative_VP'] / df['Cumulative_Vol']
-    )
+    # 2. Institutional Volume Filter (Moving Average of Volume)
+    df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
 
-    # ATR (Volatility)
+    # 3. Volatility metric (ATR)
     df['ATR'] = ta.volatility.AverageTrueRange(
         high=df['High'], low=df['Low'], close=df['Close'], window=14
     ).average_true_range()
