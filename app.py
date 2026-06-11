@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import time
-from datetime import datetime
+import plotly.graph_objects as go
 from indicators import apply_turbo_indicators
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="QuantBengal Turbo-Scanner", page_icon="🐅", layout="wide")
+st.set_page_config(page_title="Pro Algo Terminal", page_icon="📈", layout="wide")
 
-# --- ASSET DICTIONARY ---
 AVAILABLE_ASSETS = {
     "NIFTY 50": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
@@ -17,95 +15,139 @@ AVAILABLE_ASSETS = {
     "GOLD": "GC=F"
 }
 
-# --- CACHED DATA FETCHING ---
-# We cache the data for 60 seconds to prevent hitting Yahoo Finance limits
 @st.cache_data(ttl=60)
-def fetch_and_analyze(ticker: str) -> dict:
-    try:
-        df = yf.download(ticker, period="2d", interval="1m", progress=False)
-        if df.empty or len(df) < 200:
-            return {"error": "Not enough data"}
+def fetch_and_calculate(ticker: str):
+    df = yf.download(ticker, period="2d", interval="1m", progress=False)
+    if df.empty or len(df) < 200:
+        return None
+    
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-        # Flatten columns if multi-index (yfinance update)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+    # Calculate Indicators
+    df = apply_turbo_indicators(df)
+    
+    # Generate Historical Signals for the Chart
+    df['Signal'] = 0 # 0=Neutral, 1=Buy, -1=Sell
+    buy_condition = (df['Close'] > df['EMA_200']) & (df['Close'] < df['VWAP']) & (df['RSI_2'] < 10)
+    sell_condition = (df['Close'] < df['EMA_200']) & (df['Close'] > df['VWAP']) & (df['RSI_2'] > 90)
+    
+    df.loc[buy_condition, 'Signal'] = 1
+    df.loc[sell_condition, 'Signal'] = -1
+    
+    return df
 
-        df = apply_turbo_indicators(df)
-        latest = df.iloc[-1]
+def plot_professional_chart(df, asset_name):
+    """Generates a high-performance Plotly financial chart."""
+    # Zoom in on the last 120 minutes (2 hours) for clear scalping view
+    df_plot = df.tail(120)
 
-        price = float(latest['Close'])
-        vwap = float(latest['VWAP'])
-        ema_9 = float(latest['EMA_9'])
-        ema_200 = float(latest['EMA_200'])
-        rsi_2 = float(latest['RSI_2'])
+    fig = go.Figure()
 
-        # Signal Logic
-        signal = "⚪ NEUTRAL"
-        color = "white"
-        if (price > ema_200) and (price < vwap) and (rsi_2 < 10):
-            signal = "🟢 BUY (Deep Pullback)"
-            color = "#00FF00"
-        elif (price < ema_200) and (price > vwap) and (rsi_2 > 90):
-            signal = "🔴 SELL (Dead Cat Bounce)"
-            color = "#FF0000"
+    # 1. Candlesticks
+    fig.add_trace(go.Candlestick(
+        x=df_plot.index, open=df_plot['Open'], high=df_plot['High'], 
+        low=df_plot['Low'], close=df_plot['Close'], name='Price'
+    ))
 
-        return {
-            "Price": price, "VWAP": vwap, "EMA_9": ema_9, "EMA_200": ema_200, 
-            "RSI_2": rsi_2, "Signal": signal, "Color": color
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    # 2. Moving Averages & VWAP
+    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['VWAP'], line=dict(color='orange', width=2), name='VWAP'))
+    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA_200'], line=dict(color='white', width=2), name='200 EMA (Trend)'))
+    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA_9'], line=dict(color='cyan', width=1, dash='dot'), name='9 EMA (Target)'))
 
-# --- WEB INTERFACE LAYOUT ---
-st.title("🐅 QuantBengal Turbo-Scanner")
-st.markdown("### Real-Time HFT Scalping Dashboard")
+    # 3. Buy/Sell Signal Markers
+    buy_signals = df_plot[df_plot['Signal'] == 1]
+    sell_signals = df_plot[df_plot['Signal'] == -1]
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Dashboard Controls")
-selected_assets = st.sidebar.multiselect(
-    "Select Assets to Monitor:",
-    options=list(AVAILABLE_ASSETS.keys()),
-    default=["NIFTY 50", "BANKNIFTY", "SENSEX"]
-)
+    if not buy_signals.empty:
+        fig.add_trace(go.Scatter(
+            x=buy_signals.index, y=buy_signals['Low'] * 0.999,
+            mode='markers', marker=dict(symbol='triangle-up', color='lime', size=15), name='BUY Signal'
+        ))
+    if not sell_signals.empty:
+        fig.add_trace(go.Scatter(
+            x=sell_signals.index, y=sell_signals['High'] * 1.001,
+            mode='markers', marker=dict(symbol='triangle-down', color='red', size=15), name='SELL Signal'
+        ))
 
-auto_refresh = st.sidebar.checkbox("Enable Auto-Refresh (60s)", value=False)
+    # Clean UI formatting
+    fig.update_layout(
+        title=f"Live 1m Scalp Chart: {asset_name}",
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        height=600,
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
+    return fig
 
-if not selected_assets:
-    st.warning("👈 Please select at least one asset from the sidebar to begin monitoring.")
+# --- UI LAYOUT ---
+st.sidebar.title("⚙️ Algo Settings")
+selected_asset = st.sidebar.selectbox("Select Asset to Trade:", list(AVAILABLE_ASSETS.keys()))
+ticker = AVAILABLE_ASSETS[selected_asset]
+
+if st.sidebar.button("🔄 Refresh Data Now"):
+    st.cache_data.clear()
+
+st.title(f"📊 Pro Terminal: {selected_asset}")
+
+with st.spinner("Fetching Live Market Data & Calculating Algorithms..."):
+    df = fetch_and_calculate(ticker)
+
+if df is None:
+    st.error("Market is closed or not enough data to calculate 200 EMA.")
     st.stop()
 
-# --- DISPLAY METRICS ---
-# Create columns dynamically based on how many assets are selected
-cols = st.columns(len(selected_assets))
+# Get the absolute latest candle
+latest = df.iloc[-1]
+current_price = latest['Close']
+target_price = latest['EMA_9']
+atr = latest['ATR']
 
-for i, asset_name in enumerate(selected_assets):
-    ticker = AVAILABLE_ASSETS[asset_name]
-    with cols[i]:
-        st.subheader(asset_name)
-        
-        with st.spinner(f"Analyzing {asset_name}..."):
-            data = fetch_and_analyze(ticker)
+# Calculate Live Signals & Risk Parameters
+signal_status = "⚪ NEUTRAL - Waiting for setup..."
+signal_color = "gray"
+stop_loss = 0.0
+action = "None"
 
-        if "error" in data:
-            st.error(f"Data Error: Market Closed or API limit. ({data['error']})")
-        else:
-            # Display Signal prominently
-            st.markdown(f"<h3 style='text-align: center; color: {data['Color']};'>{data['Signal']}</h3>", unsafe_allow_html=True)
-            
-            # Display core metrics
-            st.metric(label="LTP (Current Price)", value=f"₹{data['Price']:.2f}")
-            st.metric(label="VWAP", value=f"₹{data['VWAP']:.2f}")
-            st.metric(label="RSI (2)", value=f"{data['RSI_2']:.1f}")
-            
-            # Target / Status details
-            st.markdown("---")
-            st.markdown(f"**200 EMA (Trend):** ₹{data['EMA_200']:.2f}")
-            st.markdown(f"**9 EMA (Target):** ₹{data['EMA_9']:.2f}")
+if latest['Signal'] == 1:
+    signal_status = "🟢 ACTIVE BUY SIGNAL (Deep Pullback)"
+    signal_color = "#00FF00"
+    action = "BUY"
+    stop_loss = current_price - (1.5 * atr) # Volatility-based SL
+elif latest['Signal'] == -1:
+    signal_status = "🔴 ACTIVE SELL SIGNAL (Dead Cat Bounce)"
+    signal_color = "#FF0000"
+    action = "SELL"
+    stop_loss = current_price + (1.5 * atr)
 
-st.sidebar.markdown("---")
-st.sidebar.write(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
+# --- TRADE EXECUTION DASHBOARD ---
+st.markdown(f"""
+    <div style="background-color: #1E1E1E; padding: 20px; border-radius: 10px; border: 1px solid {signal_color};">
+        <h3 style="margin-top:0px; color:{signal_color}; text-align:center;">{signal_status}</h3>
+    </div>
+""", unsafe_allow_html=True)
 
-# Auto-refresh logic
-if auto_refresh:
-    time.sleep(60)
-    st.rerun()
+# Risk & Reward Metrics (Only highlight if there is an active trade)
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Current Price", f"₹{current_price:.2f}")
+
+if action == "BUY":
+    col2.metric("Target (9 EMA)", f"₹{target_price:.2f}", delta=f"+₹{(target_price - current_price):.2f}")
+    col3.metric("Stop Loss (1.5 ATR)", f"₹{stop_loss:.2f}", delta=f"-₹{(current_price - stop_loss):.2f}", delta_color="inverse")
+    col4.metric("RSI (2)", f"{latest['RSI_2']:.1f}", "Oversold")
+elif action == "SELL":
+    col2.metric("Target (9 EMA)", f"₹{target_price:.2f}", delta=f"-₹{(current_price - target_price):.2f}")
+    col3.metric("Stop Loss (1.5 ATR)", f"₹{stop_loss:.2f}", delta=f"+₹{(stop_loss - current_price):.2f}", delta_color="inverse")
+    col4.metric("RSI (2)", f"{latest['RSI_2']:.1f}", "Overbought")
+else:
+    col2.metric("Target (9 EMA)", f"₹{target_price:.2f}")
+    col3.metric("Stop Loss", "Waiting...")
+    col4.metric("RSI (2)", f"{latest['RSI_2']:.1f}")
+
+st.markdown("---")
+
+# Render the Interactive Chart
+fig = plot_professional_chart(df, selected_asset)
+st.plotly_chart(fig, use_container_width=True)
+
+st.caption("Auto-refreshes every 60 seconds based on cache. Click 'Refresh Data Now' in sidebar to force pull.")
