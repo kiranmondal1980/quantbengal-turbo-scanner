@@ -127,6 +127,9 @@ def main():
         for name, ticker in SYMBOLS.items():
             process_symbol(name, ticker, loop_start)
 
+        # ADD THIS HEARTBEAT LINE HERE:
+        logger.info("Scan complete. No new alerts. Waiting for next minute...")
+
         # 3. Synchronize loop execution to exactly 60 seconds
         execution_time = time.monotonic() - loop_start
         sleep_time = max(0.0, POLL_INTERVAL_SEC - execution_time)
